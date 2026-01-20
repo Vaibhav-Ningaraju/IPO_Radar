@@ -41,6 +41,10 @@ const limiter = rateLimit({
 });
 app.use('/api/', limiter);
 
+// Trust proxy - Required for Render deployment
+// This allows Express to trust the X-Forwarded-For header from Render's proxy
+app.set('trust proxy', 1);
+
 // CORS Configuration
 const allowedOrigins = [
     'http://localhost:5173',

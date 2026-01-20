@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const nodemailer = require('nodemailer');
+const sgMail = require('@sendgrid/mail');
 const cron = require('node-cron');
 const { exec } = require('child_process');
 const path = require('path');
@@ -339,27 +340,18 @@ app.post('/api/forgot-password', async (req, res) => {
         await PasswordReset.deleteMany({ email });
 
 
+
         // Store code in MongoDB (auto-expires in 15 minutes)
         await PasswordReset.create({ email, code });
 
-        // Create transporter for sending email with timeout settings
-        const transporter = nodemailer.createTransport({
-            service: 'gmail',
-            auth: {
-                user: process.env.EMAIL_USER,
-                pass: process.env.EMAIL_PASS
-            },
-            connectionTimeout: 10000, // 10 seconds
-            greetingTimeout: 10000,
-            socketTimeout: 10000
-        });
+        // Send email using SendGrid (more reliable than Gmail SMTP)
+        if (process.env.SENDGRID_API_KEY) {
+            sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
-        // Send email with timeout wrapper
-        const sendEmailWithTimeout = () => {
-            return Promise.race([
-                transporter.sendMail({
-                    from: process.env.EMAIL_USER,
+            try {
+                await sgMail.send({
                     to: email,
+                    from: process.env.EMAIL_USER, // Must be verified in SendGrid
                     subject: 'IPO Radar - Password Reset Code',
                     html: `
                         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
@@ -372,19 +364,14 @@ app.post('/api/forgot-password', async (req, res) => {
                             <p>If you didn't request this, please ignore this email.</p>
                         </div>
                     `
-                }),
-                new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error('Email timeout after 15 seconds')), 15000)
-                )
-            ]);
-        };
-
-        try {
-            await sendEmailWithTimeout();
-            console.log(`✅ Password reset email sent to: ${email}`);
-        } catch (emailError) {
-            console.error('❌ Email sending failed:', emailError.message);
-            // Still return success to user (don't reveal if email exists)
+                });
+                console.log(`✅ Password reset email sent to: ${email}`);
+            } catch (emailError) {
+                console.error('❌ SendGrid email failed:', emailError.message);
+                // Still return success to user (don't reveal if email exists)
+            }
+        } else {
+            console.error('❌ SENDGRID_API_KEY not configured');
         }
 
         res.json({ message: 'If an account exists, a reset code has been sent to your email' });

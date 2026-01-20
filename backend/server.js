@@ -338,34 +338,54 @@ app.post('/api/forgot-password', async (req, res) => {
         // Delete any existing reset codes for this email
         await PasswordReset.deleteMany({ email });
 
+
         // Store code in MongoDB (auto-expires in 15 minutes)
         await PasswordReset.create({ email, code });
 
-        // Create transporter for sending email
+        // Create transporter for sending email with timeout settings
         const transporter = nodemailer.createTransport({
             service: 'gmail',
             auth: {
                 user: process.env.EMAIL_USER,
                 pass: process.env.EMAIL_PASS
-            }
+            },
+            connectionTimeout: 10000, // 10 seconds
+            greetingTimeout: 10000,
+            socketTimeout: 10000
         });
 
-        await transporter.sendMail({
-            from: process.env.EMAIL_USER,
-            to: email,
-            subject: 'IPO Radar - Password Reset Code',
-            html: `
-                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-                    <h2>Password Reset Request</h2>
-                    <p>Your password reset code is:</p>
-                    <div style="background-color: #f0f0f0; padding: 20px; text-align: center; font-size: 32px; font-weight: bold; letter-spacing: 5px; margin: 20px 0;">
-                        ${code}
-                    </div>
-                    <p>This code will expire in 15 minutes.</p>
-                    <p>If you didn't request this, please ignore this email.</p>
-                </div>
-            `
-        });
+        // Send email with timeout wrapper
+        const sendEmailWithTimeout = () => {
+            return Promise.race([
+                transporter.sendMail({
+                    from: process.env.EMAIL_USER,
+                    to: email,
+                    subject: 'IPO Radar - Password Reset Code',
+                    html: `
+                        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                            <h2>Password Reset Request</h2>
+                            <p>Your password reset code is:</p>
+                            <div style="background-color: #f0f0f0; padding: 20px; text-align: center; font-size: 32px; font-weight: bold; letter-spacing: 5px; margin: 20px 0;">
+                                ${code}
+                            </div>
+                            <p>This code will expire in 15 minutes.</p>
+                            <p>If you didn't request this, please ignore this email.</p>
+                        </div>
+                    `
+                }),
+                new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('Email timeout after 15 seconds')), 15000)
+                )
+            ]);
+        };
+
+        try {
+            await sendEmailWithTimeout();
+            console.log(`✅ Password reset email sent to: ${email}`);
+        } catch (emailError) {
+            console.error('❌ Email sending failed:', emailError.message);
+            // Still return success to user (don't reveal if email exists)
+        }
 
         res.json({ message: 'If an account exists, a reset code has been sent to your email' });
 

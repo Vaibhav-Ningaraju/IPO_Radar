@@ -196,7 +196,7 @@ export default function Dashboard() {
     const avgSubStr = currentAvg > 0 ? `${currentAvg.toFixed(1)}x` : (currentAvg === 0 && currentMonthIPOs.length > 0 ? '0x' : 'N/A');
 
     let subTrendStr = '-';
-    const baselineRaw = prevAvg > 0 ? prevAvg : 1.0;
+    const baselineRaw = prevAvg > 0 ? prevAvg : 10.0;
     const currentRaw = currentAvg;
 
     const baseline = parseFloat(baselineRaw.toFixed(1));

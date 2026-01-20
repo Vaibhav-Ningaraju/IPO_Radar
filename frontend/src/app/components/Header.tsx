@@ -69,7 +69,6 @@ export function Header({ searchQuery, onSearchChange, onLogout, onLoginClick, on
             </div>
             <div>
               <h1 className="text-xl font-semibold text-foreground">IPO Radar</h1>
-              <p className="text-xs text-muted-foreground">Indian Mainboard Intelligence</p>
             </div>
           </div>
 

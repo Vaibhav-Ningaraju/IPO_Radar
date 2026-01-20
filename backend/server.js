@@ -48,6 +48,8 @@ const allowedOrigins = [
     process.env.FRONTEND_URL
 ].filter(Boolean);
 
+console.log('🌐 Allowed CORS Origins:', allowedOrigins);
+
 app.use(cors({
     origin: function (origin, callback) {
         // Allow requests with no origin (mobile apps, Postman, etc.)
@@ -785,6 +787,26 @@ app.get('/api/live-listings', async (req, res) => {
         console.error('Live listings fetch error:', err);
         res.status(500).json({ error: 'Failed to fetch live listings' });
     }
+});
+
+// Root route - API status
+app.get('/', (req, res) => {
+    res.json({
+        status: 'online',
+        message: 'IPO Radar API Server',
+        version: '1.0.0',
+        endpoints: {
+            ipos: '/api/ipos',
+            liveListings: '/api/live-listings',
+            marketStatus: '/api/market-status',
+            auth: {
+                register: '/api/register',
+                login: '/api/login',
+                googleLogin: '/api/google-login'
+            }
+        },
+        documentation: 'https://github.com/Vaibhav-Ningaraju/IPO_Radar'
+    });
 });
 
 // Fetch IPOs

@@ -117,7 +117,7 @@ export function Header({ searchQuery, onSearchChange, onLogout, onLoginClick, on
                     <span>Notify Me</span>
                   </DropdownMenuItem>
                   <DropdownMenuItem asChild className="cursor-pointer">
-                    <a href="mailto:support@iporadar.com">
+                    <a href="mailto:vaibhavn056@gmail.com">
                       <MessageSquare className="mr-2 h-4 w-4" />
                       <span>Contact Us</span>
                     </a>

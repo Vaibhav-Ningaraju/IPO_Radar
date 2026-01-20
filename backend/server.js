@@ -455,7 +455,7 @@ app.post('/api/reset-password', async (req, res) => {
 
 // Update Profile / Preferences
 app.post('/api/profile', async (req, res) => {
-    let { email, preferences } = req.body;
+    let { email, name, preferences } = req.body;
 
     if (!email) {
         return res.status(400).json({ error: 'Email is required' });
@@ -468,9 +468,18 @@ app.post('/api/profile', async (req, res) => {
     email = sanitizeInput(email);
 
     try {
+        // Build update object - only update fields that are provided
+        const updateFields = {};
+        if (preferences !== undefined) {
+            updateFields.preferences = preferences;
+        }
+        if (name !== undefined && name.trim()) {
+            updateFields.name = sanitizeInput(name.trim());
+        }
+
         const user = await User.findOneAndUpdate(
             { email },
-            { $set: { preferences } },
+            { $set: updateFields },
             { new: true }
         );
 

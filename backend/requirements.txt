@@ -7,3 +7,4 @@ selenium==4.17.2
 thefuzz==0.22.1
 Levenshtein==0.26.1
 yfinance==0.2.40
+sendgrid==6.11.0

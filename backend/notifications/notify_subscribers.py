@@ -95,7 +95,7 @@ def get_ipo_card_html(ipo):
         except:
             close_date = ipo_date_range
             
-    detail_link = f"http://localhost:5173/ipo/{ipo['_id']}"
+    detail_link = f"https://iporadar.vercel.app/ipo/{ipo['_id']}"
     
     gmp_color = 'green' if '₹' in str(gmp) and str(gmp) != 'N/A' else '#666'
 
@@ -175,44 +175,71 @@ def main():
         has_content = False
 
         # Header
-        html_body = f"""
+        html_body = """
         <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; line-height: 1.5; color: #333;">
-            <h2 style="margin-bottom: 8px;">IPO Radar Update</h2>
-            <div style="background-color: #f3f4f6; padding: 8px 12px; border-radius: 6px; margin-bottom: 20px; font-size: 14px;">
-                Market Sentiment: <strong style="color: #000;">{sentiment}</strong>
-            </div>
+            <h2 style="margin-bottom: 20px; color: #111827;">IPO Radar Update</h2>
         """
 
-        # Section: New / Open IPOs
+        # Section: New / Open IPOs (Max 5)
         if prefs.get('newIPOs', True) and open_ipos:
             section_html = "<h3 style='color: #16a34a; margin-top: 24px;'>🟢 Open Now</h3>"
-            for ipo in open_ipos:
+            total_open = len(open_ipos)
+            for ipo in open_ipos[:5]:  # Show max 5
                 section_html += get_ipo_card_html(ipo)
+            
+            # Add link if more than 5
+            if total_open > 5:
+                section_html += f"""
+                <div style="text-align: center; margin: 16px 0;">
+                    <a href="https://iporadar.vercel.app" style="display: inline-block; padding: 12px 24px; background-color: #2563eb; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 500;">
+                        View All {total_open} Open IPOs →
+                    </a>
+                </div>
+                """
             
             html_body += section_html
             has_content = True
 
-        # Section: Upcoming / Listing Date (Grouped for simplicity if listingDate requested)
+        # Section: Upcoming / Listing Date (Max 5)
         if (prefs.get('listingDate', False) or prefs.get('closingSoon', False)) and upcoming_ipos:
-            # We can refine this to check dates, but for now showing upcoming is good value
             section_html = "<h3 style='color: #2563eb; margin-top: 24px;'>🔵 Upcoming & Listing Soon</h3>"
+            total_upcoming = len(upcoming_ipos)
             shown_any = False
-            for ipo in upcoming_ipos:
-                # Todo: Add finer filters (e.g. check if listing date is set)
+            for ipo in upcoming_ipos[:5]:  # Show max 5
                 section_html += get_ipo_card_html(ipo)
                 shown_any = True
+            
+            # Add link if more than 5
+            if total_upcoming > 5:
+                section_html += f"""
+                <div style="text-align: center; margin: 16px 0;">
+                    <a href="https://iporadar.vercel.app" style="display: inline-block; padding: 12px 24px; background-color: #2563eb; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 500;">
+                        View All {total_upcoming} Upcoming IPOs →
+                    </a>
+                </div>
+                """
             
             if shown_any:
                 html_body += section_html
                 has_content = True
 
         # Footer
-        html_body += """
+        unsubscribe_link = f"https://iporadar.vercel.app/unsubscribe?email={email}"
+        html_body += f"""
             <hr style="margin-top: 30px; border: none; border-top: 1px solid #e5e7eb;">
-            <p style="font-size: 12px; color: #6b7280; text-align: center;">
-                You are receiving this because you subscribed on IPO Radar. 
-                <a href="http://localhost:5173" style="color: #2563eb;">Manage Preferences</a>
-            </p>
+            <div style="font-size: 12px; color: #6b7280; text-align: center; padding: 16px 0;">
+                <p style="margin: 0 0 8px 0;">
+                    You are receiving this because you subscribed to IPO Radar updates.
+                </p>
+                <p style="margin: 0;">
+                    <a href="https://iporadar.vercel.app" style="color: #2563eb; text-decoration: none;">Manage Preferences</a>
+                    &nbsp;•&nbsp;
+                    <a href="{unsubscribe_link}" style="color: #6b7280; text-decoration: none;">Unsubscribe</a>
+                </p>
+                <p style="margin: 8px 0 0 0; color: #9ca3af; font-size: 11px;">
+                    IPO Radar • Daily IPO Updates • India
+                </p>
+            </div>
         </div>
         """
 

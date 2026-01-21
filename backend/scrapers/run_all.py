@@ -7,7 +7,7 @@ import logging
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.mailer import send_email_report
 from pymongo import MongoClient
-from fuzzywuzzy import fuzz
+from thefuzz import fuzz
 from dotenv import load_dotenv
 
 load_dotenv()

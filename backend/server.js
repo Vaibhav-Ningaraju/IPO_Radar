@@ -571,13 +571,14 @@ async function findTicker(ipoName) {
     }
 
     try {
-        // Rate limiting: Max 10 requests per minute
+        // Aggressive rate limiting: Max 5 requests per minute
         const now = Date.now();
         const timeSinceWindowStart = now - (cache.lastYahooRequest - cache.yahooRequestWindow);
 
-        if (timeSinceWindowStart < cache.yahooRequestWindow && cache.yahooRequestCount >= 10) {
-            console.log(`⏳ Rate limit reached for Yahoo Finance. Waiting...`);
-            await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+        if (timeSinceWindowStart < cache.yahooRequestWindow && cache.yahooRequestCount >= 5) {
+            console.log(`⏳ Rate limit reached for Yahoo Finance. Waiting 10 seconds...`);
+            await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
+            cache.yahooRequestCount = 0; // Reset after wait
         }
 
         // Reset counter if window has passed
@@ -585,10 +586,10 @@ async function findTicker(ipoName) {
             cache.yahooRequestCount = 0;
         }
 
-        // Add delay between requests (500ms)
+        // Add delay between requests (2 seconds minimum)
         const timeSinceLastRequest = now - cache.lastYahooRequest;
-        if (timeSinceLastRequest < 500) {
-            await new Promise(resolve => setTimeout(resolve, 500 - timeSinceLastRequest));
+        if (timeSinceLastRequest < 2000) {
+            await new Promise(resolve => setTimeout(resolve, 2000 - timeSinceLastRequest));
         }
 
         cache.lastYahooRequest = Date.now();
@@ -611,7 +612,13 @@ async function findTicker(ipoName) {
             return match.symbol;
         }
     } catch (err) {
-        console.error(`Ticker search failed for ${ipoName}:`, err.message);
+        // If rate limited, cache null to avoid immediate retry
+        if (err.message && err.message.includes('Too Many Requests')) {
+            console.error(`❌ Yahoo Finance rate limit hit for ${ipoName}. Caching null.`);
+            cache.tickerMap[ipoName] = null;
+        } else {
+            console.error(`Ticker search failed for ${ipoName}:`, err.message);
+        }
     }
     return null;
 }

@@ -19,7 +19,10 @@ const cache = {
     marketStatus: { data: null, timestamp: 0 },
     liveListings: { data: null, timestamp: 0 },
     tickerMap: {}, // IPO Name -> Ticker Symbol
-    listingPriceMap: {} // Symbol -> Listing Price (Historical)
+    listingPriceMap: {}, // Symbol -> Listing Price (Historical)
+    lastYahooRequest: 0, // Timestamp of last Yahoo Finance request
+    yahooRequestCount: 0, // Number of requests in current minute
+    yahooRequestWindow: 60000 // 1 minute window
 };
 
 const app = express();
@@ -516,15 +519,81 @@ app.get('/api/profile', async (req, res) => {
     }
 });
 
+// Unsubscribe from email notifications
+app.post('/api/unsubscribe', async (req, res) => {
+    let { email } = req.body;
+
+    if (!email) {
+        return res.status(400).json({ error: 'Email is required' });
+    }
+
+    if (!isValidEmail(email)) {
+        return res.status(400).json({ error: 'Invalid email format' });
+    }
+
+    email = sanitizeInput(email);
+
+    try {
+        const user = await User.findOneAndUpdate(
+            { email },
+            {
+                $set: {
+                    'preferences.emailEnabled': false,
+                    'preferences.newIPOs': false,
+                    'preferences.closingSoon': false,
+                    'preferences.listingDate': false,
+                    'preferences.allotmentStatus': false
+                }
+            },
+            { new: true }
+        );
+
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        res.json({
+            message: 'Successfully unsubscribed from email notifications',
+            success: true
+        });
+    } catch (err) {
+        console.error('Unsubscribe error:', err);
+        res.status(500).json({ error: 'Failed to unsubscribe' });
+    }
+});
+
 // --- LIVE MARKET ROUTES ---
 
-// Helper: Find Ticker
+// Helper: Find Ticker with Rate Limiting
 async function findTicker(ipoName) {
     if (cache.tickerMap[ipoName]) {
         return cache.tickerMap[ipoName];
     }
 
     try {
+        // Rate limiting: Max 10 requests per minute
+        const now = Date.now();
+        const timeSinceWindowStart = now - (cache.lastYahooRequest - cache.yahooRequestWindow);
+
+        if (timeSinceWindowStart < cache.yahooRequestWindow && cache.yahooRequestCount >= 10) {
+            console.log(`⏳ Rate limit reached for Yahoo Finance. Waiting...`);
+            await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+        }
+
+        // Reset counter if window has passed
+        if (now - cache.lastYahooRequest > cache.yahooRequestWindow) {
+            cache.yahooRequestCount = 0;
+        }
+
+        // Add delay between requests (500ms)
+        const timeSinceLastRequest = now - cache.lastYahooRequest;
+        if (timeSinceLastRequest < 500) {
+            await new Promise(resolve => setTimeout(resolve, 500 - timeSinceLastRequest));
+        }
+
+        cache.lastYahooRequest = Date.now();
+        cache.yahooRequestCount++;
+
         // BE CAREFUL: Don't remove 'Technologies', 'India', 'Tech' as they are distincitve.
         // Only remove legal entity suffixes and 'IPO'.
         const query = ipoName.replace(/IPO|Limited|Ltd|Pvt|Private|Public|Ltd\.|Limited\./gi, '').trim();

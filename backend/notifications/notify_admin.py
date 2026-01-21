@@ -97,7 +97,7 @@ def send_scraper_summary():
         """
         
         for dup in potential_duplicates:
-            merge_url = f"http://localhost:5001/api/merge?keep={dup['existing_id']}&merge={dup['duplicate_id']}"
+            merge_url = f"https://ipo-radar-j5o7.onrender.com/api/merge?keep={dup['existing_id']}&merge={dup['duplicate_id']}"
             html_body += f"""
                     <tr style="border-bottom: 1px solid #fecaca;">
                         <td style="padding: 10px;">{dup['existing']}</td>

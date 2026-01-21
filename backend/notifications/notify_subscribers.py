@@ -174,9 +174,17 @@ def main():
         content_parts = []
         has_content = False
 
-        # Header
+        # Header with proper DOCTYPE and meta tags
         html_body = """
-        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; line-height: 1.5; color: #333;">
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>IPO Radar Update</title>
+        </head>
+        <body style="margin: 0; padding: 0; background-color: #f9fafb;">
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; line-height: 1.5; color: #333; background-color: #ffffff; padding: 20px;">
             <h2 style="margin-bottom: 20px; color: #111827;">IPO Radar Update</h2>
         """
 
@@ -241,6 +249,8 @@ def main():
                 </p>
             </div>
         </div>
+        </body>
+        </html>
         """
 
         if has_content:

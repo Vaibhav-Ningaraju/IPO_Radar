@@ -21,7 +21,7 @@ DB_NAME = "ipo-radar"
 COLLECTION_NAME = "ipos"
 
 try:
-    client = MongoClient(MONGO_URI, tlsAllowInvalidCertificates=True)
+    client = MongoClient(MONGO_URI)
     db = client[DB_NAME]
     collection = db[COLLECTION_NAME]
     print("✅ Connected to MongoDB")

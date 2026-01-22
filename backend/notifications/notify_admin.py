@@ -20,7 +20,7 @@ def send_scraper_summary():
         return
 
     # Fix SSL issues with Python 3.13
-    client = MongoClient(mongo_uri, tlsAllowInvalidCertificates=True)
+    client = MongoClient(mongo_uri)
     db = client["ipo-radar"]
     ipos_collection = db["ipos"]
 

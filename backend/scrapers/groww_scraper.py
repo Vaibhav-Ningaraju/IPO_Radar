@@ -17,7 +17,7 @@ CLOSED_URL = "https://groww.in/ipo/closed?filter=mainboard"
 
 OUTPUT_FILE = "groww_mainboard_ipos_clean.json"
 
-LIMIT = 20   # 👈 change this to limit number of IPOs scraped
+LIMIT = 100  # 👈 change this to limit number of IPOs scraped
 
 
 # ---------------- DRIVER ----------------
@@ -221,7 +221,7 @@ def main():
         if not mongo_uri:
             raise ValueError("MONGO_URI not found in environment variables")
         
-        client = MongoClient(mongo_uri, tlsAllowInvalidCertificates=True)
+        client = MongoClient(mongo_uri)
         db = client["ipo-radar"]
         collection = db["ipos"]
         print("✅ Connected to MongoDB")

@@ -1,6 +1,6 @@
-import json
 import time
 import os
+import requests
 from dotenv import load_dotenv
 from pymongo import MongoClient
 from bs4 import BeautifulSoup
@@ -12,15 +12,17 @@ from webdriver_manager.chrome import ChromeDriverManager
 load_dotenv()
 
 BASE_URL = "https://www.investorgain.com"
-INDEX_URL = "https://www.investorgain.com/report/live-ipo-gmp/331/"
 
-# MongoDB Setup
+IPO_LIST_API = "https://webnodejs.investorgain.com/cloud/ipodashboard/ipoList-read/IPO"
+GMP_LIST_API = "https://webnodejs.investorgain.com/cloud/ipodashboard/gmpList-read/IPO"
+SUB_LIST_API = "https://webnodejs.investorgain.com/cloud/ipodashboard/iposubscription-read/IPO"
+
 MONGO_URI = os.getenv("MONGO_URI")
 DB_NAME = "ipo-radar"
 COLLECTION_NAME = "ipos"
 
 try:
-    client = MongoClient(MONGO_URI, tlsAllowInvalidCertificates=True)
+    client = MongoClient(MONGO_URI)
     db = client[DB_NAME]
     collection = db[COLLECTION_NAME]
     print("✅ Connected to MongoDB")
@@ -41,69 +43,58 @@ def setup_driver():
     )
 
 
-def get_all_gmp_links(driver):
-    print("🔍 Loading InvestorGain Live GMP page...")
-    driver.get(INDEX_URL)
-    time.sleep(5)
+def fetch_api_data():
+    ipo_map = {}
 
-    soup = BeautifulSoup(driver.page_source, "lxml")
-    links = set()
+    ipo_list = requests.get(IPO_LIST_API, timeout=30).json().get("ipoList", [])
+    gmp_list = requests.get(GMP_LIST_API, timeout=30).json().get("ipoList", [])
+    sub_list = requests.get(SUB_LIST_API, timeout=30).json().get("ipoList", [])
 
-    # 👉 Each IPO row has an <a href="/gmp/..."> with IPO name as text
-    for a in soup.select('a[href^="/gmp/"]'):
-        name = a.get_text(strip=True)
+    for ipo in ipo_list:
+        ipo_map[ipo["id"]] = {
+            "id": ipo["id"],
+            "name": ipo["company_short_name"],
+            "slug": ipo["urlrewrite_folder_name"],
+            "status": ipo.get("ipo_status"),
+        }
 
-        # 🚫 Skip SME IPOs
-        if "SME" in name.upper():
-            continue
+    for g in gmp_list:
+        if g["id"] in ipo_map:
+            ipo_map[g["id"]].update({
+                "gmp": g.get("gmp"),
+                "ipo_price": g.get("ipo_price"),
+            })
 
-        href = a.get("href")
-        if href and href.count("/") >= 3:
-            links.add(BASE_URL + href)
+    for s in sub_list:
+        if s["id"] in ipo_map:
+            ipo_map[s["id"]]["subscription"] = s.get("Total")
 
-    print(f"✅ Found {len(links)} NON-SME GMP pages")
-    return sorted(links)
+    final = []
+    for v in ipo_map.values():
+        if "slug" in v and "id" in v:
+            v["gmp_url"] = f"{BASE_URL}/gmp/{v['slug']}-gmp/{v['id']}/"
+            final.append(v)
+
+    print(f"✅ API merged {len(final)} IPOs")
+    return final
 
 
-def parse_gmp_table(driver, url):
+def parse_gmp_trend(driver, url):
     driver.get(url)
     time.sleep(4)
 
     soup = BeautifulSoup(driver.page_source, "lxml")
-
-    # Extract IPO Name from H1
-    h1 = soup.find("h1")
-    ipo_name = h1.get_text(strip=True).replace(" GMP", "").replace(" IPO", "").strip() if h1 else "Unknown"
-
-    # Find the GMP table specifically by headers
-    table = None
-    tables = soup.find_all("table")
-    for t in tables:
-        headers = [th.get_text(strip=True).lower() for th in t.select("thead th")]
-        # GMP table typically has 'gmp' or 'ipo price'
-        if any(keyword in headers for keyword in ['gmp', 'ipo price', 'gmp(₹)']):
-             table = t
-             break
-    
+    table = soup.find("table")
     if not table:
-        # Fallback to schema logic if header search fails, or just return empty
-        wrapper = soup.find("div", class_="table-responsive", itemtype="http://schema.org/Table")
-        if wrapper:
-             table = wrapper.find("table")
-    
-    if not table:
-         return ipo_name, None, []
+        return []
 
     rows = []
-    latest_gmp = None
-    latest_sub = None
-    
     for tr in table.select("tbody tr"):
         tds = tr.find_all("td")
         if len(tds) < 8:
             continue
 
-        row_data = {
+        rows.append({
             "gmp_date": tds[0].get_text(strip=True),
             "ipo_price": tds[1].get_text(strip=True),
             "gmp": tds[2].get_text(" ", strip=True),
@@ -112,20 +103,9 @@ def parse_gmp_table(driver, url):
             "estimated_listing_price": tds[5].get_text(" ", strip=True),
             "estimated_profit": tds[6].get_text(strip=True),
             "last_updated": tds[7].get_text(strip=True),
-        }
-        rows.append(row_data)
+        })
 
-        # Capture latest available data (first row usually)
-        if not latest_gmp and row_data["gmp"] != "--": 
-             latest_gmp = row_data
-        if not latest_sub and row_data["subscription"] != "--":
-             latest_sub = row_data
-
-    
-    # Use first row as fallback if no valid data found yet
-    if rows and not latest_gmp: latest_gmp = rows[0]
-
-    return ipo_name, latest_gmp, rows
+    return rows
 
 
 def main():
@@ -133,47 +113,36 @@ def main():
         print("Aborting due to no DB connection")
         return
 
+    ipos = fetch_api_data()
     driver = setup_driver()
-    gmp_links = get_all_gmp_links(driver)
 
-    for i, url in enumerate(gmp_links, 1):
-        print(f"[{i}/{len(gmp_links)}] Scraping {url}")
-        
+    for i, ipo in enumerate(ipos, 1):
+        print(f"[{i}/{len(ipos)}] {ipo['name']}")
+
         try:
-            name, gmp_data, gmp_trend = parse_gmp_table(driver, url)
+            trend = parse_gmp_trend(driver, ipo["gmp_url"])
 
-            if not gmp_data:
-                print("   ⚠️ GMP table not found")
-                continue
-            
-            # Prepare update payload
-            # Clean up keys for 'values' map in MongoDB
-            update_data = {
-                "values.gmp": gmp_data.get("gmp"),
-                "values.subscription": gmp_data.get("subscription"),
-                "values.estimated_listing_price": gmp_data.get("estimated_listing_price"),
-                "values.gmp_updated": gmp_data.get("gmp_date"),
-                "values.gmp_last_updated": gmp_data.get("last_updated"),
-                "values.investorgain_url": url,
-                "values.gmp_trend": gmp_trend  # Save full history
+            update = {
+                "ipo_name": ipo["name"],
+                "status": ipo.get("status"),
+                "values.gmp": ipo.get("gmp"),
+                "values.subscription": ipo.get("subscription"),
+                "values.ipo_price": ipo.get("ipo_price"),
+                "values.investorgain_url": ipo["gmp_url"],
+                "values.gmp_trend": trend,
+                "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")
             }
-            
-            # Try to match existing IPO in DB
-            # Matches roughly by name. 
-            # Note: This might create duplicates if names don't match exactly.
-            # Using regex to improve match chance? Or just update_one with upsert=True?
-            # User asked to "store data", implying updates.
-            # I will use upsert=True on 'ipo_name'.
-            
+
             collection.update_one(
-                {"ipo_name": name}, 
-                {"$set": update_data}, 
+                {"ipo_name": ipo["name"]},
+                {"$set": update},
                 upsert=True
             )
-            print(f"   ✅ Updated {name}")
+
+            print("   ✅ Updated")
 
         except Exception as e:
-            print(f"   ❌ Error: {e}")
+            print(f"   ❌ {e}")
 
     driver.quit()
     print("✅ InvestorGain Scraper finished.")

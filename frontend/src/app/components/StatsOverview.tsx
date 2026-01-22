@@ -16,7 +16,7 @@ export function StatsOverview({ activeCount, activeThisWeek, upcomingCount, list
       icon: Activity,
       label: 'Active IPOs',
       value: activeCount.toString(),
-      change: `+${activeThisWeek} this week`,
+      change: activeThisWeek > 0 ? `+${activeThisWeek} this week` : '',
       positive: true
     },
     {
@@ -59,14 +59,16 @@ export function StatsOverview({ activeCount, activeThisWeek, upcomingCount, list
                 </div>
                 <p className="text-xs mb-1 text-muted-foreground">{stat.label}</p>
                 <p className="text-2xl font-semibold mb-1 text-foreground">{stat.value}</p>
-                <p
-                  className="text-xs"
-                  style={{
-                    color: stat.positive === true ? '#16A34A' : stat.positive === false ? '#DC2626' : 'var(--muted-foreground)'
-                  }}
-                >
-                  {stat.change}
-                </p>
+                {stat.change && (
+                  <p
+                    className="text-xs"
+                    style={{
+                      color: stat.positive === true ? '#16A34A' : stat.positive === false ? '#DC2626' : 'var(--muted-foreground)'
+                    }}
+                  >
+                    {stat.change}
+                  </p>
+                )}
               </div>
             </div>
           </div>

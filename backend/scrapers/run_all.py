@@ -128,7 +128,7 @@ def run_scrapers():
     try:
         mongo_uri = os.getenv("MONGO_URI")
         if mongo_uri:
-            client = MongoClient(mongo_uri)
+            client = MongoClient(mongo_uri, tlsAllowInvalidCertificates=True)
             db = client["ipo-radar"]
             duplicates = find_duplicates(db)
             

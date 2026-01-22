@@ -221,7 +221,7 @@ def main():
         if not mongo_uri:
             raise ValueError("MONGO_URI not found in environment variables")
         
-        client = MongoClient(mongo_uri)
+        client = MongoClient(mongo_uri, tlsAllowInvalidCertificates=True)
         db = client["ipo-radar"]
         collection = db["ipos"]
         print("✅ Connected to MongoDB")

@@ -134,7 +134,8 @@ def main():
         print("❌ MONGO_URI not found.")
         return
 
-    client = MongoClient(mongo_uri)
+    # Fix SSL issues with Python 3.13
+    client = MongoClient(mongo_uri, tlsAllowInvalidCertificates=True)
     db = client["ipo-radar"]
     users_collection = db["users"]
     ipos_collection = db["ipos"]

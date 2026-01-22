@@ -21,7 +21,7 @@ DB_NAME = "ipo-radar"
 COLLECTION_NAME = "ipos"
 
 try:
-    client = MongoClient(MONGO_URI)
+    client = MongoClient(MONGO_URI, tlsAllowInvalidCertificates=True)
     db = client[DB_NAME]
     collection = db[COLLECTION_NAME]
     # Create unique index on ipo_name to prevent duplicates

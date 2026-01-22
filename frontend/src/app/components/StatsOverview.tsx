@@ -16,7 +16,7 @@ export function StatsOverview({ activeCount, activeThisWeek, upcomingCount, list
       icon: Activity,
       label: 'Active IPOs',
       value: activeCount.toString(),
-      change: activeThisWeek > 0 ? `+${activeThisWeek} this week` : '',
+      change: activeCount > 0 ? `+${activeCount} this week` : '',
       positive: true
     },
     {

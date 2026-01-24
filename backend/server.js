@@ -597,6 +597,7 @@ app.post('/api/unsubscribe', async (req, res) => {
 
 // Helper: Find Ticker with Rate Limiting
 // Helper: Find Ticker with Rate Limiting (Queued)
+// Helper: Find Ticker using Finnhub
 async function findTicker(ipoName) {
     if (cache.tickerMap[ipoName] !== undefined) {
         return cache.tickerMap[ipoName];
@@ -607,16 +608,19 @@ async function findTicker(ipoName) {
         .trim();
 
     try {
-        const results = await yahooCall(() =>
-            yahooFinance.search(query)
-        );
+        const result = await new Promise((resolve, reject) => {
+            finnhubClient.symbolSearch(query, (err, data) => {
+                if (err) reject(err);
+                else resolve(data);
+            });
+        });
 
-        if (!results.quotes || !Array.isArray(results.quotes)) {
+        if (!result.result || !Array.isArray(result.result)) {
             cache.tickerMap[ipoName] = null;
             return null;
         }
 
-        const match = results.quotes.find(q => q.symbol && (q.symbol.endsWith('.NS') || q.symbol.endsWith('.BO')));
+        const match = result.result.find(q => q.symbol && (q.symbol.endsWith('.NS') || q.symbol.endsWith('.BO')));
 
         if (match) {
             cache.tickerMap[ipoName] = match.symbol;
@@ -626,30 +630,14 @@ async function findTicker(ipoName) {
         console.error(`Ticker search failed for ${ipoName}:`, err.message);
     }
 
-    // Cache null if failed or not found to avoid retrying immediately
+    // Cache null if failed or not found
     cache.tickerMap[ipoName] = null;
     return null;
 }
 
+// Helper: Get Listing Price (History) - Skipped for Finnhub Free Tier
 async function getListingPrice(symbol) {
-    if (cache.listingPriceMap[symbol]) {
-        return cache.listingPriceMap[symbol];
-    }
-
-    try {
-        const chart = await yahooCall(() =>
-            yahooFinance.chart(symbol, { period1: '2000-01-01', interval: '1d' })
-        );
-
-        const first = chart?.quotes?.[0];
-        if (first?.open) {
-            cache.listingPriceMap[symbol] = first.open;
-            return first.open;
-        }
-    } catch (e) {
-        console.error(`Chart failed for ${symbol}:`, e.message);
-    }
-
+    // Placeholder if we implemented historical candles
     return null;
 }
 

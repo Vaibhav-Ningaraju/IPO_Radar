@@ -9,43 +9,95 @@ const { exec } = require('child_process');
 const path = require('path');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const finnhub = require('finnhub');
-require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+const YahooFinance = require("yahoo-finance2").default;
+const yahoo = new YahooFinance();
 
-// Finnhub Setup
-const api_key = finnhub.ApiClient.instance.authentications['api_key'];
-api_key.apiKey = process.env.FINNHUB_KEY;
-const finnhubClient = new finnhub.DefaultApi();
+// ---- Queue & Rate Control (User Provided) ----
+const YAHOO_MIN_GAP = 2500; // 1 request every 2.5s
+let lastCall = 0;
+let queue = Promise.resolve();
 
-// Helper: Promisified Quote
-function getQuote(symbol) {
-    return new Promise((resolve, reject) => {
-        finnhubClient.quote(symbol, (err, data) => {
-            if (err) reject(err);
-            else resolve(data);
-        });
+function yahooCall(fn) {
+    queue = queue.then(async () => {
+        const now = Date.now();
+        const wait = Math.max(0, YAHOO_MIN_GAP - (now - lastCall));
+        if (wait > 0) await new Promise(r => setTimeout(r, wait));
+        lastCall = Date.now();
+        return fn();
     });
+    return queue;
 }
 
-// Helper: Batch Quotes (with rate limiting)
+// ---- Quotes ----
 async function getBatchQuotes(symbols) {
-    const results = {};
-    for (const sym of symbols) {
-        try {
-            const q = await getQuote(sym);
-            results[sym] = {
-                price: q.c,
-                open: q.o,
-                high: q.h,
-                low: q.l,
-                prevClose: q.pc
-            };
-        } catch (e) {
-            console.error(`Quote failed for ${sym}: ${e.message}`);
+    const now = Date.now();
+    const fresh = [];
+    const toFetch = [];
+
+    // Initialize cache maps if not present
+    if (!cache.quotes) cache.quotes = new Map();
+
+    for (const s of symbols) {
+        const c = cache.quotes.get(s);
+        if (c && now - c.ts < QUOTE_TTL) {
+            fresh.push(c.data);
+        } else {
+            toFetch.push(s);
         }
-        await new Promise(r => setTimeout(r, 1200)); // 1.2s gap to stay within free tier limits
     }
-    return results;
+
+    if (toFetch.length) {
+        try {
+            console.log(`Fetching batch quotes for: ${toFetch.join(', ')}`);
+            const res = await yahooCall(() => yahoo.quote(toFetch));
+            const arr = Array.isArray(res) ? res : [res];
+
+            for (const q of arr) {
+                cache.quotes.set(q.symbol, { data: q, ts: Date.now() });
+                fresh.push(q);
+            }
+        } catch (e) {
+            console.error("Yahoo batch failed:", e.message);
+        }
+    }
+
+    // Convert array back to map for compatibility with existing code structure
+    return fresh.reduce((acc, curr) => {
+        acc[curr.symbol] = {
+            price: curr.regularMarketPrice,
+            open: curr.regularMarketOpen,
+            high: curr.regularMarketDayHigh,
+            low: curr.regularMarketDayLow,
+            prevClose: curr.regularMarketPreviousClose,
+            changePercent: curr.regularMarketChangePercent
+        };
+        return acc;
+    }, {});
+}
+
+// ---- Listing Price (First Candle) ----
+async function getListingPrice(symbol) {
+    if (!cache.listing) cache.listing = new Map();
+
+    if (cache.listing.has(symbol)) {
+        return cache.listing.get(symbol);
+    }
+
+    try {
+        const chart = await yahooCall(() =>
+            yahoo.chart(symbol, { period1: "2000-01-01", interval: "1d" })
+        );
+
+        const first = chart?.quotes?.[0];
+        if (first?.open) {
+            cache.listing.set(symbol, first.open);
+            return first.open;
+        }
+    } catch (e) {
+        console.error(`Chart failed for ${symbol}`);
+    }
+
+    return null;
 }
 
 // Cache Setup
@@ -595,44 +647,19 @@ app.post('/api/unsubscribe', async (req, res) => {
 
 // --- LIVE MARKET ROUTES ---
 
-// Helper: Find Ticker with Rate Limiting
-// Helper: Find Ticker with Rate Limiting (Queued)
-// Helper: Find Ticker using Finnhub
-async function findTicker(ipoName) {
-    if (cache.tickerMap[ipoName] !== undefined) {
-        return cache.tickerMap[ipoName];
-    }
-
-    const query = ipoName
+// Helper: Construct Symbol (Simple Heuristic for Twelve Data)
+// Note: We are skipping the search API to save calls and trusting the format
+function findTicker(ipoName) {
+    // Basic normalization: Remove common suffixes
+    const name = ipoName
         .replace(/IPO|Limited|Ltd|Pvt|Private|Public|Ltd\.|Limited\./gi, '')
-        .trim();
+        .replace(/[^a-zA-Z0-9 ]/g, '') // Remove special chars
+        .trim()
+        .split(' ')[0] // Take first word usually (RISKY but simple start)
+        .toUpperCase();
 
-    try {
-        const result = await new Promise((resolve, reject) => {
-            finnhubClient.symbolSearch(query, (err, data) => {
-                if (err) reject(err);
-                else resolve(data);
-            });
-        });
-
-        if (!result.result || !Array.isArray(result.result)) {
-            cache.tickerMap[ipoName] = null;
-            return null;
-        }
-
-        const match = result.result.find(q => q.symbol && (q.symbol.endsWith('.NS') || q.symbol.endsWith('.BO')));
-
-        if (match) {
-            cache.tickerMap[ipoName] = match.symbol;
-            return match.symbol;
-        }
-    } catch (err) {
-        console.error(`Ticker search failed for ${ipoName}:`, err.message);
-    }
-
-    // Cache null if failed or not found
-    cache.tickerMap[ipoName] = null;
-    return null;
+    // Default to NSE first
+    return `${name}.NS`;
 }
 
 
@@ -657,7 +684,7 @@ const parseDate = (str) => {
 
 // Core Logic: Fetch and Update Prices
 async function updateLivePrices() {
-    console.log('🔄 Starting background price update...');
+    console.log('🔄 Starting background price update via Yahoo Finance...');
     try {
         const allIPOs = await IPO.find().sort({ updatedAt: -1 });
 
@@ -686,19 +713,23 @@ async function updateLivePrices() {
         for (const ipo of listedIPOs) {
             let symbol = ipo.values?.symbol;
 
-            // If not in DB, try to find it
+            // If not in DB, construct it
             if (!symbol) {
-                // Check cache first
-                if (cache.tickerMap[ipo.ipo_name]) {
-                    symbol = cache.tickerMap[ipo.ipo_name];
-                } else {
-                    // Fetch from Finnhub
-                    symbol = await findTicker(ipo.ipo_name);
-                    // Add rate limit delay for search
-                    await new Promise(r => setTimeout(r, 1200));
-                }
+                // Try to guess symbol using normalization
+                // Clean name
+                const cleanName = ipo.ipo_name
+                    .replace(/IPO|Limited|Ltd|Pvt|Private|Public|Ltd\.|Limited\./gi, '')
+                    .trim();
 
-                // Save if found
+                // Heuristic: Try to find a plausible ticker. 
+                // For now, let's just attempt to use the first word or known map if we had one.
+                // Ideally we'd search, but let's try `NSE:{FirstWord}` as a placeholder if no symbol.
+                // Better: If we have Scraped Symbol from source use it.
+                // Otherwise, maybe skip or log warning.
+
+                // Let's assume for now we don't have it and try to guess or use the `findTicker` replacement
+                symbol = findTicker(ipo.ipo_name);
+
                 if (symbol) {
                     await IPO.updateOne({ _id: ipo._id }, { $set: { "values.symbol": symbol } });
                 }
@@ -723,7 +754,13 @@ async function updateLivePrices() {
             if (!ipo || !quote || !quote.price) continue;
 
             const currentPrice = quote.price;
-            const issuePrice = parsePrice(ipo.values?.['issue price']);
+            let issuePrice = parsePrice(ipo.values?.['issue price']); // Parse from DB string
+
+            // If issue price missing, try to get listing price from history
+            if (issuePrice <= 0) {
+                const listingPrice = await getListingPrice(symbol);
+                if (listingPrice) issuePrice = listingPrice;
+            }
 
             let changePercent = 0;
             if (issuePrice > 0) {

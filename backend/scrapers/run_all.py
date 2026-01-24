@@ -28,9 +28,9 @@ logger = logging.getLogger(__name__)
 
 SCRAPERS = [
     ("chittorgarh_scraper.py", "Chittorgarh"),
-    ("groww_scraper.py", "Groww"),
     ("investorgain_scraper.py", "InvestorGain"),
-    ("sptulsian_scraper.py", "SP Tulsian")
+    ("sptulsian_scraper.py", "SP Tulsian"),
+    ("groww_scraper.py", "Groww")
 ]
 
 def find_duplicates(db):

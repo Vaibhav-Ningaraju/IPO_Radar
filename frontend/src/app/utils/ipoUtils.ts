@@ -51,9 +51,20 @@ export const mergeIPOs = (data: ScraperData[]): ScraperData[] => {
                 existing.raw_html = { ...item.raw_html, ...(existing.raw_html || {}) };
             }
 
-            // Pick best status (Open > Upcoming > Closed)
-            if (item.status === 'open') existing.status = 'open';
-            else if (item.status === 'upcoming' && existing.status === 'closed') existing.status = 'upcoming';
+            // Status Priority: Trust Groww if available
+            const itemIsGroww = !!item.groww_url;
+            const existingIsGroww = !!existing.groww_url;
+
+            if (itemIsGroww) {
+                // If new item is from Groww, always take its status
+                existing.status = item.status;
+            } else if (existingIsGroww) {
+                // If existing is from Groww, do NOT overwrite status with non-Groww
+            } else {
+                // Standard priority: Open > Upcoming > Closed
+                if (item.status === 'open') existing.status = 'open';
+                else if (item.status === 'upcoming' && existing.status === 'closed') existing.status = 'upcoming';
+            }
 
             // Pick best URL (prefer one with more info?? or just keep first)
             if (!existing.url && item.url) existing.url = item.url;

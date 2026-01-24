@@ -9,42 +9,52 @@ const { exec } = require('child_process');
 const path = require('path');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const YahooFinance = require('yahoo-finance2').default;
-const yahooFinance = new YahooFinance();
+const finnhub = require('finnhub');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
+// Finnhub Setup
+const api_key = finnhub.ApiClient.instance.authentications['api_key'];
+api_key.apiKey = process.env.FINNHUB_KEY;
+const finnhubClient = new finnhub.DefaultApi();
+
+// Helper: Promisified Quote
+function getQuote(symbol) {
+    return new Promise((resolve, reject) => {
+        finnhubClient.quote(symbol, (err, data) => {
+            if (err) reject(err);
+            else resolve(data);
+        });
+    });
+}
+
+// Helper: Batch Quotes (with rate limiting)
+async function getBatchQuotes(symbols) {
+    const results = {};
+    for (const sym of symbols) {
+        try {
+            const q = await getQuote(sym);
+            results[sym] = {
+                price: q.c,
+                open: q.o,
+                high: q.h,
+                low: q.l,
+                prevClose: q.pc
+            };
+        } catch (e) {
+            console.error(`Quote failed for ${sym}: ${e.message}`);
+        }
+        await new Promise(r => setTimeout(r, 1200)); // 1.2s gap to stay within free tier limits
+    }
+    return results;
+}
+
 // Cache Setup
-// Cache Setup
-const CACHE_TTL = 15000; // 15 seconds (Turbo Mode)
+const CACHE_TTL = 15000; // 15 seconds
 const cache = {
     liveListings: { data: null, timestamp: 0 },
     tickerMap: {}, // IPO Name -> Ticker Symbol
-    listingPriceMap: {}, // Symbol -> Listing Price (Historical)
+    listingPriceMap: {}, // Symbol -> Listing Price
 };
-
-// --- Yahoo Finance Queue ---
-const YAHOO_MIN_GAP = 2500; // 1 request every 2.5s
-let lastYahooCall = 0;
-let yahooQueue = Promise.resolve();
-
-function yahooCall(fn) {
-    yahooQueue = yahooQueue.then(async () => {
-        const now = Date.now();
-        const wait = Math.max(0, YAHOO_MIN_GAP - (now - lastYahooCall));
-        if (wait > 0) {
-            await new Promise(r => setTimeout(r, wait));
-        }
-        try {
-            const result = await fn();
-            lastYahooCall = Date.now();
-            return result;
-        } catch (e) {
-            lastYahooCall = Date.now(); // Update time even on failure
-            throw e;
-        }
-    });
-    return yahooQueue;
-}
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -736,32 +746,25 @@ app.get('/api/live-listings', async (req, res) => {
         const uniqueSymbols = [...new Set(symbolsToFetch)];
 
         // 2. Batch Data Fetching
-        let quotes = [];
+        let quotesMap = {};
         if (uniqueSymbols.length > 0) {
             try {
-                const res = await yahooCall(() =>
-                    yahooFinance.quote(uniqueSymbols)
-                );
-                quotes = Array.isArray(res) ? res : [res];
+                quotesMap = await getBatchQuotes(uniqueSymbols);
             } catch (e) {
                 console.error("Batch quote failed:", e.message);
             }
         }
 
         // 3. Map Data Back to IPOs
-        // We iterate uniqueSymbols to look up result
-        for (const quote of quotes) {
-            const symbol = quote.symbol;
+        for (const symbol of uniqueSymbols) {
+            const quote = quotesMap[symbol];
             const ipo = ipoMap[symbol];
-            if (!ipo) continue;
+            if (!ipo || !quote) continue;
 
             // Priority 1: Check In-Memory Cache for Historical Listing Price
             let listingPrice = cache.listingPriceMap[symbol];
 
-            // Priority 2: Fetch from Yahoo History if not in cache
-            if (!listingPrice) {
-                listingPrice = await getListingPrice(symbol);
-            }
+            // Priority 2: Fetch from API History (Skipped for Finnhub Free Tier)
 
             // Priority 3: Fallback to Scraped Data
             if (!listingPrice) {
@@ -771,18 +774,13 @@ app.get('/api/live-listings', async (req, res) => {
 
             const issuePriceVal = parsePrice(ipo.values?.['issue price']);
 
-            const currentPrice = quote.regularMarketPrice;
+            const currentPrice = quote.price;
             const issuePrice = issuePriceVal;
 
             // Calculate gain
-            // Priority: (Current - Issue) / Issue
             let changePercent = 0;
             if (issuePrice > 0) {
                 changePercent = ((currentPrice - issuePrice) / issuePrice) * 100;
-            } else if (listingPrice > 0) {
-                // Fallback: (Current - Listing) / Listing?
-                // No, User usually cares about Issue vs Current.
-                // If Issue is unknown, maybe 0.
             }
 
             if (currentPrice > 0) {

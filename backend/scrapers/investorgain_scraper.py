@@ -85,12 +85,27 @@ def parse_gmp_trend(driver, url):
     time.sleep(4)
 
     soup = BeautifulSoup(driver.page_source, "lxml")
-    table = soup.find("table")
-    if not table:
-        return []
+    
+    # improved selector: look for table with specific headers
+    target_table = None
+    tables = soup.find_all("table")
+    
+    for t in tables:
+        headers = [th.get_text(strip=True).lower() for th in t.find_all("th")]
+        if "gmp date" in headers or "sub2 sauda rate" in headers:
+            target_table = t
+            break
+            
+    if not target_table:
+        # Fallback to first table if specific one not found (backward compatibility)
+        if tables:
+            target_table = tables[0]
+        else:
+            return []
 
     rows = []
-    for tr in table.select("tbody tr"):
+    # Skip header row
+    for tr in target_table.find_all("tr")[1:]:
         tds = tr.find_all("td")
         if len(tds) < 8:
             continue

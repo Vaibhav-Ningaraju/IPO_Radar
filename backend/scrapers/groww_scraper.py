@@ -4,7 +4,8 @@ from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.chrome.service import Service
+# from webdriver_manager.chrome import ChromeDriverManager (Removed)
 from pymongo import MongoClient
 from dotenv import load_dotenv
 import os
@@ -19,17 +20,18 @@ OUTPUT_FILE = "groww_mainboard_ipos_clean.json"
 
 LIMIT = 50
 
-
 # ---------------- DRIVER ----------------
 
 def setup_driver():
     options = Options()
     options.add_argument("--headless=new")
     options.add_argument("--window-size=1920,1080")
-    return webdriver.Chrome(
-        service=Service(ChromeDriverManager().install()),
-        options=options
-    )
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--disable-extensions")
+    # Selenium 4.x handles driver automatically
+    return webdriver.Chrome(options=options)
 
 
 # ---------------- IPO LIST HELPERS ----------------

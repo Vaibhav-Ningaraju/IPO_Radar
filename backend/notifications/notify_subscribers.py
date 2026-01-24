@@ -135,7 +135,8 @@ def main():
         return
 
     # Fix SSL issues with Python 3.13
-    client = MongoClient(mongo_uri)
+    import certifi
+    client = MongoClient(mongo_uri, tlsCAFile=certifi.where())
     db = client["ipo-radar"]
     users_collection = db["users"]
     ipos_collection = db["ipos"]

@@ -7,7 +7,8 @@ from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.chrome.service import Service
+# from webdriver_manager.chrome import ChromeDriverManager (Removed)
 
 load_dotenv()
 
@@ -37,10 +38,10 @@ def setup_driver():
     options.add_argument("--window-size=1920,1080")
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
-    return webdriver.Chrome(
-        service=Service(ChromeDriverManager().install()),
-        options=options
-    )
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-extensions")
+    # Selenium 4.x handles driver automatically
+    return webdriver.Chrome(options=options)
 
 
 def fetch_api_data():

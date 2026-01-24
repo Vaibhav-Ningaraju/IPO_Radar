@@ -14,16 +14,37 @@ const yahooFinance = new YahooFinance();
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
 // Cache Setup
+// Cache Setup
 const CACHE_TTL = 15000; // 15 seconds (Turbo Mode)
 const cache = {
-    marketStatus: { data: null, timestamp: 0 },
     liveListings: { data: null, timestamp: 0 },
     tickerMap: {}, // IPO Name -> Ticker Symbol
     listingPriceMap: {}, // Symbol -> Listing Price (Historical)
-    lastYahooRequest: 0, // Timestamp of last Yahoo Finance request
-    yahooRequestCount: 0, // Number of requests in current minute
-    yahooRequestWindow: 60000 // 1 minute window
 };
+
+// --- Yahoo Finance Queue ---
+const YAHOO_MIN_GAP = 2500; // 1 request every 2.5s
+let lastYahooCall = 0;
+let yahooQueue = Promise.resolve();
+
+function yahooCall(fn) {
+    yahooQueue = yahooQueue.then(async () => {
+        const now = Date.now();
+        const wait = Math.max(0, YAHOO_MIN_GAP - (now - lastYahooCall));
+        if (wait > 0) {
+            await new Promise(r => setTimeout(r, wait));
+        }
+        try {
+            const result = await fn();
+            lastYahooCall = Date.now();
+            return result;
+        } catch (e) {
+            lastYahooCall = Date.now(); // Update time even on failure
+            throw e;
+        }
+    });
+    return yahooQueue;
+}
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -565,45 +586,25 @@ app.post('/api/unsubscribe', async (req, res) => {
 // --- LIVE MARKET ROUTES ---
 
 // Helper: Find Ticker with Rate Limiting
+// Helper: Find Ticker with Rate Limiting (Queued)
 async function findTicker(ipoName) {
-    if (cache.tickerMap[ipoName]) {
+    if (cache.tickerMap[ipoName] !== undefined) {
         return cache.tickerMap[ipoName];
     }
 
+    const query = ipoName
+        .replace(/IPO|Limited|Ltd|Pvt|Private|Public|Ltd\.|Limited\./gi, '')
+        .trim();
+
     try {
-        // Aggressive rate limiting: Max 5 requests per minute
-        const now = Date.now();
-        const timeSinceWindowStart = now - (cache.lastYahooRequest - cache.yahooRequestWindow);
+        const results = await yahooCall(() =>
+            yahooFinance.search(query)
+        );
 
-        if (timeSinceWindowStart < cache.yahooRequestWindow && cache.yahooRequestCount >= 5) {
-            console.log(`⏳ Rate limit reached for Yahoo Finance. Waiting 10 seconds...`);
-            await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
-            cache.yahooRequestCount = 0; // Reset after wait
+        if (!results.quotes || !Array.isArray(results.quotes)) {
+            cache.tickerMap[ipoName] = null;
+            return null;
         }
-
-        // Reset counter if window has passed
-        if (now - cache.lastYahooRequest > cache.yahooRequestWindow) {
-            cache.yahooRequestCount = 0;
-        }
-
-        // Add delay between requests (2 seconds minimum)
-        const timeSinceLastRequest = now - cache.lastYahooRequest;
-        if (timeSinceLastRequest < 2000) {
-            await new Promise(resolve => setTimeout(resolve, 2000 - timeSinceLastRequest));
-        }
-
-        cache.lastYahooRequest = Date.now();
-        cache.yahooRequestCount++;
-
-        // BE CAREFUL: Don't remove 'Technologies', 'India', 'Tech' as they are distincitve.
-        // Only remove legal entity suffixes and 'IPO'.
-        const query = ipoName.replace(/IPO|Limited|Ltd|Pvt|Private|Public|Ltd\.|Limited\./gi, '').trim();
-
-        // Special handling: if query is too short (e.g. "Tata"), it might match wrong.
-        // But with 'Technologies' kept, it should be "Tata Technologies".
-
-        const results = await yahooFinance.search(query);
-        if (!results.quotes || !Array.isArray(results.quotes)) return null;
 
         const match = results.quotes.find(q => q.symbol && (q.symbol.endsWith('.NS') || q.symbol.endsWith('.BO')));
 
@@ -612,96 +613,37 @@ async function findTicker(ipoName) {
             return match.symbol;
         }
     } catch (err) {
-        // If rate limited, cache null to avoid immediate retry
-        if (err.message && err.message.includes('Too Many Requests')) {
-            console.error(`❌ Yahoo Finance rate limit hit for ${ipoName}. Caching null.`);
-            cache.tickerMap[ipoName] = null;
-        } else {
-            console.error(`Ticker search failed for ${ipoName}:`, err.message);
-        }
+        console.error(`Ticker search failed for ${ipoName}:`, err.message);
     }
+
+    // Cache null if failed or not found to avoid retrying immediately
+    cache.tickerMap[ipoName] = null;
     return null;
 }
 
-// 1. Market Status (Nifty 50 & Aggregated Sentinel)
-app.get('/api/market-status', async (req, res) => {
-    const now = Date.now();
-
-    // Calculate IPO Sentiment Stats (Real-time from DB)
-    let sentiment = {
-        totalAmount: 0,
-        totalApplications: "2.4M+", // Placeholder as we don't have exact application data yet
-        qib: "N/A",
-        hni: "N/A",
-        retail: "N/A"
-    };
+async function getListingPrice(symbol) {
+    if (cache.listingPriceMap[symbol]) {
+        return cache.listingPriceMap[symbol];
+    }
 
     try {
-        const openIPOs = await IPO.find({ status: { $in: ['open', 'upcoming'] } });
-        let totalVal = 0;
+        const chart = await yahooCall(() =>
+            yahooFinance.chart(symbol, { period1: '2000-01-01', interval: '1d' })
+        );
 
-        // Simple parsing helpers
-        const parseMoney = (str) => {
-            if (!str) return 0;
-            const val = parseFloat(str.replace(/[^\d.]/g, ''));
-            return isNaN(val) ? 0 : val;
-        };
-        const parseShares = (str) => {
-            if (!str) return 0;
-            // "2,20,00,000 (100%)" -> 22000000
-            const clean = str.split('(')[0].replace(/[^\d]/g, '');
-            const val = parseInt(clean);
-            return isNaN(val) ? 0 : val;
-        };
-
-        for (const ipo of openIPOs) {
-            const price = parseMoney(ipo.values?.['issue price']) || parseMoney(ipo.values?.['price band']);
-            const shares = parseShares(ipo.values?.['total shares offered']) || parseShares(ipo.values?.['shares offered']);
-
-            if (price && shares) {
-                totalVal += (price * shares);
-            }
+        const first = chart?.quotes?.[0];
+        if (first?.open) {
+            cache.listingPriceMap[symbol] = first.open;
+            return first.open;
         }
-
-        // Format to Crores
-        const crVal = totalVal / 10000000; // 1 Cr = 10,000,000
-        sentiment.totalAmount = `₹${Math.round(crVal).toLocaleString()} Cr`;
-
     } catch (e) {
-        console.error("Sentiment calc error:", e);
+        console.error(`Chart failed for ${symbol}:`, e.message);
     }
 
-    if (cache.marketStatus.data && (now - cache.marketStatus.timestamp < CACHE_TTL)) {
-        // Return cached Nifty but merge with fresh sentiment? 
-        // Or just return cached all. Since sentiment doesn't change fast, cached all is fine.
-        // But we just calculated sentiment. Let's merge.
-        const merged = { ...cache.marketStatus.data, sentiment };
-        return res.json(merged);
-    }
+    return null;
+}
 
-    try {
-        const quote = await yahooFinance.quote('^NSEI');
-        const data = {
-            symbol: '^NSEI',
-            regularMarketPrice: quote.regularMarketPrice,
-            regularMarketChange: quote.regularMarketChange,
-            regularMarketChangePercent: quote.regularMarketChangePercent,
-            sentiment // Include calculated sentiment
-        };
-        cache.marketStatus = { data, timestamp: now };
-        res.json(data);
-    } catch (err) {
-        console.error('Market status fetch error:', err.message);
-        // Fallback: return sentiment even if Nifty fails
-        res.json({
-            symbol: '^NSEI',
-            regularMarketPrice: 0,
-            regularMarketChange: 0,
-            regularMarketChangePercent: 0,
-            sentiment
-        });
-    }
-});
+
 
 // 2. Live Listings
 app.get('/api/live-listings', async (req, res) => {
@@ -797,13 +739,12 @@ app.get('/api/live-listings', async (req, res) => {
         let quotes = [];
         if (uniqueSymbols.length > 0) {
             try {
-                // Batch up to 500? library handles it usually.
-                quotes = await yahooFinance.quote(uniqueSymbols);
-                // Ensure array
-                if (!Array.isArray(quotes)) quotes = [quotes];
+                const res = await yahooCall(() =>
+                    yahooFinance.quote(uniqueSymbols)
+                );
+                quotes = Array.isArray(res) ? res : [res];
             } catch (e) {
                 console.error("Batch quote failed:", e.message);
-                // Fallback?
             }
         }
 
@@ -819,24 +760,7 @@ app.get('/api/live-listings', async (req, res) => {
 
             // Priority 2: Fetch from Yahoo History if not in cache
             if (!listingPrice) {
-                try {
-                    const chart = await yahooFinance.chart(symbol, { period1: '2000-01-01', interval: '1d' });
-                    if (chart && chart.quotes && chart.quotes.length > 0) {
-                        // Find sortable first candle? usually [0] is oldest if period1 is old.
-                        // Yahoo usually returns ascending date.
-                        const firstCandle = chart.quotes[0];
-                        if (firstCandle && firstCandle.open) {
-                            listingPrice = firstCandle.open;
-                            // Cache it forever (Listing Price doesn't change)
-                            cache.listingPriceMap[symbol] = listingPrice;
-
-                            // OPTIONAL: Persist to DB for cold start speed ? 
-                            // IPO.updateOne({ _id: ipo._id }, { $set: { "values.yahoo_listing_price": listingPrice } });
-                        }
-                    }
-                } catch (e) {
-                    // console.error(`History fetch failed for ${symbol}`, e.message);
-                }
+                listingPrice = await getListingPrice(symbol);
             }
 
             // Priority 3: Fallback to Scraped Data

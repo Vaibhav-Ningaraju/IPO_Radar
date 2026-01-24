@@ -756,10 +756,12 @@ async function updateLivePrices() {
             const currentPrice = quote.price;
             let issuePrice = parsePrice(ipo.values?.['issue price']); // Parse from DB string
 
-            // If issue price missing, try to get listing price from history
-            if (issuePrice <= 0) {
-                const listingPrice = await getListingPrice(symbol);
-                if (listingPrice) issuePrice = listingPrice;
+            // Always fetch listing price (first candle open)
+            const listingPrice = await getListingPrice(symbol);
+
+            // If issue price missing, fallback to listing price
+            if (issuePrice <= 0 && listingPrice) {
+                issuePrice = listingPrice;
             }
 
             let changePercent = 0;
@@ -774,6 +776,7 @@ async function updateLivePrices() {
                     $set: {
                         "live": {
                             price: currentPrice,
+                            listingPrice: listingPrice || 0, // Store explicit listing price
                             changePercent: changePercent,
                             lastUpdated: new Date()
                         }
@@ -796,7 +799,8 @@ app.get('/api/live-listings', async (req, res) => {
 
         const result = ipos.map(ipo => {
             const listingAtVal = ipo.values?.['listing at'];
-            const listingPrice = parsePrice(listingAtVal);
+            // Prefer the live fetched listing price, fallback to scraped value
+            const listingPrice = ipo.live?.listingPrice || parsePrice(listingAtVal);
             const issuePrice = parsePrice(ipo.values?.['issue price']);
 
             return {

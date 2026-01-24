@@ -45,7 +45,7 @@ export function AllListings({ onBack, userEmail, isAuthenticated, onLoginClick, 
         };
 
         fetchData();
-        const intervalId = setInterval(fetchData, 15000); // Poll every 15 seconds
+        const intervalId = setInterval(fetchData, 90000); // Poll every 90 seconds
 
         return () => clearInterval(intervalId);
     }, []);

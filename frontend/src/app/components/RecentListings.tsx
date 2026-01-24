@@ -37,7 +37,7 @@ export function RecentListings({ onViewAll }: RecentListingsProps) {
     };
 
     fetchData(); // Initial fetch
-    const intervalId = setInterval(fetchData, 15000); // Poll every 15 seconds
+    const intervalId = setInterval(fetchData, 90000); // Poll every 90 seconds
 
     return () => clearInterval(intervalId); // Cleanup
   }, []);

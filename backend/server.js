@@ -635,92 +635,72 @@ async function findTicker(ipoName) {
     return null;
 }
 
-// Helper: Get Listing Price (History) - Skipped for Finnhub Free Tier
-async function getListingPrice(symbol) {
-    // Placeholder if we implemented historical candles
+
+// --- BACKGROUND JOBS ---
+
+// Helper to parse currency strings like "₹109 per share"
+const parsePrice = (str) => {
+    if (!str) return 0;
+    const cleaned = str.toString().replace(/[^\d.]/g, '');
+    const val = parseFloat(cleaned);
+    return isNaN(val) ? 0 : val;
+};
+
+// Helper to parse dates
+const parseDate = (str) => {
+    if (!str) return null;
+    // Try standard parse
+    const d = new Date(str);
+    if (!isNaN(d.getTime())) return d;
     return null;
-}
+};
 
-
-
-// 2. Live Listings
-app.get('/api/live-listings', async (req, res) => {
-    const now = Date.now();
-    // Cache check currently disabled until stability verification
-    if (cache.liveListings.data && (now - cache.liveListings.timestamp < CACHE_TTL)) {
-        const showAll = req.query.all === 'true';
-        const data = cache.liveListings.data;
-        return res.json(showAll ? data : data.slice(0, 5));
-    }
-
+// Core Logic: Fetch and Update Prices
+async function updateLivePrices() {
+    console.log('🔄 Starting background price update...');
     try {
-        // Fetch ALL IPOs (filter client-side or here)
-        // We want anything that seems "Listed". 
-        // Logic: Has a 'listing date' OR status='closed' OR 'listing at' is populated.
-        // Let's just grab all and filter.
         const allIPOs = await IPO.find().sort({ updatedAt: -1 });
 
-        // Helper to parse currency strings like "₹109 per share"
-        const parsePrice = (str) => {
-            if (!str) return 0;
-            const cleaned = str.toString().replace(/[^\d.]/g, '');
-            const val = parseFloat(cleaned);
-            return isNaN(val) ? 0 : val;
-        };
-
-        // Helper to parse dates
-        const parseDate = (str) => {
-            if (!str) return null;
-            // Try standard parse
-            const d = new Date(str);
-            if (!isNaN(d.getTime())) return d;
-            return null;
-        };
-
+        // Filter for listed IPOs
         const listedIPOs = allIPOs.filter(ipo => {
             const listingAt = ipo.values?.['listing at'];
             const listingDateStr = ipo.values?.['listing date'] || ipo.values?.['listed on'];
 
-            // STRICT CHECK: Must have a listing date AND that date must be in the past
             if (listingDateStr) {
                 const d = parseDate(listingDateStr);
-                // If date is valid and is in the past (including today)
-                // Buffer: end of today
-                if (d && d <= new Date()) {
-                    return true;
-                }
+                // Listed in the past (or today)
+                if (d && d <= new Date()) return true;
             }
-
             // Fallback
             const price = parsePrice(listingAt);
             if (price > 0) return true;
-
             return false;
         });
 
-        const liveData = [];
+        console.log(`🔍 Found ${listedIPOs.length} listed IPOs to check.`);
+
         const symbolsToFetch = [];
         const ipoMap = {}; // symbol -> ipo obj
 
-        // 1. Symbol Identification Phase
+        // 1. Resolve Symbols
         for (const ipo of listedIPOs) {
-            let symbol = ipo.values?.symbol; // Check if already saved in DB (we previously didn't save this) but let's assume we might start saving it in future.
+            let symbol = ipo.values?.symbol;
 
             // If not in DB, try to find it
             if (!symbol) {
-                // Check in-memory cache
-                symbol = await findTicker(ipo.ipo_name);
+                // Check cache first
+                if (cache.tickerMap[ipo.ipo_name]) {
+                    symbol = cache.tickerMap[ipo.ipo_name];
+                } else {
+                    // Fetch from Finnhub
+                    symbol = await findTicker(ipo.ipo_name);
+                    // Add rate limit delay for search
+                    await new Promise(r => setTimeout(r, 1200));
+                }
 
-                // If found, let's SAVE it to DB for future speed!
+                // Save if found
                 if (symbol) {
-                    // We update the document in background to persist symbol
-                    // We add it to 'values' object or root? Mongoose 'strict: false' allows root.
-                    // But schema defined `values: Object`. Let's put it in `values.symbol` for consistency?
-                    // Or separate field? Let's assume we modify the IPO document itself.
-                    // Wait, `ipo` is a mongoose doc.
-
-                    // Optimization: Fire and forget update
-                    IPO.updateOne({ _id: ipo._id }, { $set: { "values.symbol": symbol } }).catch(e => console.error("DB Update failed", e));
+                    await IPO.updateOne({ _id: ipo._id }, { $set: { "values.symbol": symbol } });
                 }
             }
 
@@ -730,69 +710,77 @@ app.get('/api/live-listings', async (req, res) => {
             }
         }
 
-        // Deduplicate symbols
         const uniqueSymbols = [...new Set(symbolsToFetch)];
+        console.log(`📊 Fetching quotes for ${uniqueSymbols.length} symbols...`);
 
-        // 2. Batch Data Fetching
-        let quotesMap = {};
-        if (uniqueSymbols.length > 0) {
-            try {
-                quotesMap = await getBatchQuotes(uniqueSymbols);
-            } catch (e) {
-                console.error("Batch quote failed:", e.message);
-            }
-        }
+        // 2. Fetch Prices (Rate Limited)
+        const quotesMap = await getBatchQuotes(uniqueSymbols);
 
-        // 3. Map Data Back to IPOs
+        // 3. Update Database
         for (const symbol of uniqueSymbols) {
             const quote = quotesMap[symbol];
             const ipo = ipoMap[symbol];
-            if (!ipo || !quote) continue;
-
-            // Priority 1: Check In-Memory Cache for Historical Listing Price
-            let listingPrice = cache.listingPriceMap[symbol];
-
-            // Priority 2: Fetch from API History (Skipped for Finnhub Free Tier)
-
-            // Priority 3: Fallback to Scraped Data
-            if (!listingPrice) {
-                const listingAtVal = ipo.values?.['listing at'];
-                listingPrice = parsePrice(listingAtVal);
-            }
-
-            const issuePriceVal = parsePrice(ipo.values?.['issue price']);
+            if (!ipo || !quote || !quote.price) continue;
 
             const currentPrice = quote.price;
-            const issuePrice = issuePriceVal;
+            const issuePrice = parsePrice(ipo.values?.['issue price']);
 
-            // Calculate gain
             let changePercent = 0;
             if (issuePrice > 0) {
                 changePercent = ((currentPrice - issuePrice) / issuePrice) * 100;
             }
 
-            if (currentPrice > 0) {
-                liveData.push({
-                    name: ipo.ipo_name,
-                    symbol: symbol,
-                    price: currentPrice,
-                    changePercent: changePercent,
-                    listingPrice: listingPrice,
-                    issuePrice: issuePrice
-                });
-            }
+            // Save live data to DB
+            await IPO.updateOne(
+                { _id: ipo._id },
+                {
+                    $set: {
+                        "live": {
+                            price: currentPrice,
+                            changePercent: changePercent,
+                            lastUpdated: new Date()
+                        }
+                    }
+                }
+            );
         }
-
-        // Return top 5 OR all if requested
-        const showAll = req.query.all === 'true';
-        const result = showAll ? liveData : liveData.slice(0, 5);
-
-        cache.liveListings = { data: liveData, timestamp: now };
-
-        res.json(result);
+        console.log('✅ Background price update complete.');
 
     } catch (err) {
-        console.error('Live listings fetch error:', err);
+        console.error('❌ Error in background price update:', err);
+    }
+}
+
+// 2. Live Listings API (Read from DB)
+app.get('/api/live-listings', async (req, res) => {
+    try {
+        // Fetch IPOs that have live data
+        const ipos = await IPO.find({ "live.price": { $exists: true } }).sort({ "live.lastUpdated": -1 });
+
+        const result = ipos.map(ipo => {
+            const listingAtVal = ipo.values?.['listing at'];
+            const listingPrice = parsePrice(listingAtVal);
+            const issuePrice = parsePrice(ipo.values?.['issue price']);
+
+            return {
+                name: ipo.ipo_name,
+                symbol: ipo.values?.symbol || 'N/A',
+                price: ipo.live.price,
+                changePercent: ipo.live.changePercent,
+                listingPrice: listingPrice,
+                issuePrice: issuePrice,
+                lastUpdated: ipo.live.lastUpdated
+            };
+        });
+
+        // Optional: Sort by changePercent desc?
+        result.sort((a, b) => b.changePercent - a.changePercent);
+
+        const showAll = req.query.all === 'true';
+        res.json(showAll ? result : result.slice(0, 5));
+
+    } catch (err) {
+        console.error('Live listings read error:', err);
         res.status(500).json({ error: 'Failed to fetch live listings' });
     }
 });
@@ -1017,6 +1005,11 @@ cron.schedule('0 4,13 * * *', () => {
     });
 }, {
     timezone: "UTC"
+});
+
+// 3. Live Price Polling (Every 2 minutes)
+cron.schedule('*/2 * * * *', () => {
+    updateLivePrices();
 });
 
 app.listen(PORT, () => {

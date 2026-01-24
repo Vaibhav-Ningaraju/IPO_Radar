@@ -1012,6 +1012,9 @@ cron.schedule('*/2 * * * *', () => {
     updateLivePrices();
 });
 
+// Run once on startup to populate cache immediately
+updateLivePrices();
+
 app.listen(PORT, () => {
     console.log(`Server running at http://localhost:${PORT}`);
 });

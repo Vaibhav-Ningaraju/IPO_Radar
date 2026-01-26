@@ -1012,26 +1012,7 @@ async function performMerge(masterId, candidateId, res) {
 
 // --- SCHEDULER ---
 
-// 1. Run Scrapers at 9:00 AM and 6:00 PM IST (3:30 AM and 12:30 PM UTC)
-// Cron runs in UTC on Render, so we need to subtract 5:30 from IST
-cron.schedule('30 3,12 * * *', () => {
-    console.log('⏰ Running Scheduled Scrapers (9 AM or 6 PM IST)...');
-    exec('cd scrapers && python3 run_all.py', (error, stdout, stderr) => {
-        if (error) {
-            console.error(`❌ Scraper Script Error: ${error.message}`);
-            // TODO: Send alert email to admin
-            return;
-        }
-        if (stderr) {
-            console.error(`⚠️ Scraper Script StdErr: ${stderr}`);
-        }
-        console.log(`✅ Scraper Script Output:\n${stdout}`);
-    });
-}, {
-    timezone: "UTC"
-});
-
-// 2. Run Notifications at 9:30 AM and 6:30 PM IST (4:00 AM and 1:00 PM UTC)
+// 1. Run Notifications at 9:30 AM and 6:30 PM IST (4:00 AM and 1:00 PM UTC)
 cron.schedule('0 4,13 * * *', () => {
     console.log('⏰ Running Scheduled Notification Script (9:30 AM or 6:30 PM IST)...');
     exec('cd notifications && python3 notify_subscribers.py', (error, stdout, stderr) => {
@@ -1048,7 +1029,7 @@ cron.schedule('0 4,13 * * *', () => {
     timezone: "UTC"
 });
 
-// 3. Live Price Polling (Every 2 minutes)
+// 2. Live Price Polling (Every 2 minutes)
 cron.schedule('*/2 * * * *', () => {
     updateLivePrices();
 });
